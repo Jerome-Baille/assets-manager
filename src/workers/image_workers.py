@@ -122,12 +122,11 @@ class ImageConverterWorker(QObject):
     progress = pyqtSignal(int)
     status_update = pyqtSignal(str)
 
-    def __init__(self, input_files, output_dir, output_format, quality, resize_settings=None):
+    def __init__(self, input_files, output_dir, output_format, resize_settings=None):
         super().__init__()
         self.input_files = input_files
         self.output_dir = output_dir
         self.output_format = output_format
-        self.quality = quality
         self.resize_settings = resize_settings
 
     def run(self):
@@ -135,28 +134,26 @@ class ImageConverterWorker(QObject):
             total_files = len(self.input_files)
             processed_files = 0
             self.status_update.emit("Preparing to convert...")
-            
+
             format_settings = {
                 'WebP': ('.webp', 'WebP'),
                 'JPEG': ('.jpg', 'JPEG'),
                 'PNG': ('.png', 'PNG'),
                 'AVIF': ('.avif', 'AVIF')
             }
-            
-            extension, save_format = format_settings.get(self.output_format, ('.jpg', 'JPEG'))
-            
+
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 futures = []
-                
-                def convert_file(file_path):
+
+                def convert_file(file_path, output_format):
                     try:
                         with Image.open(file_path) as img:
                             original_width, original_height = img.size
-                            
+
                             if self.resize_settings:
                                 target_width = self.resize_settings['width']
                                 target_height = self.resize_settings['height']
-                                
+
                                 if self.resize_settings['keep_aspect_ratio']:
                                     aspect_ratio = original_width / original_height
                                     if original_width > original_height:
@@ -168,52 +165,60 @@ class ImageConverterWorker(QObject):
                                 else:
                                     new_width = target_width
                                     new_height = target_height
-                                
+
                                 img = img.resize((new_width, new_height), Image.LANCZOS)
                                 original_width, original_height = new_width, new_height
-                            
+
                             base_name = os.path.splitext(os.path.basename(file_path))[0]
+                            extension, save_format = format_settings[output_format]
                             output_path = os.path.join(self.output_dir, f"{base_name}{extension}")
-                            
-                            if self.output_format == 'PNG':
-                                compression_level = 9 - int(self.quality / 11.1)
+
+                            if output_format == 'PNG':
+                                compression_level = 9 - int(100 / 11.1)  # Hardcoded quality to 100
                                 img.save(output_path, format='PNG', optimize=True, 
                                        compress_level=min(9, max(0, compression_level)))
-                            elif self.output_format == 'AVIF':
+                            elif output_format == 'AVIF':
                                 width, height = img.size
                                 if width % 8 != 0 or height % 8 != 0:
                                     new_width = (width // 8) * 8
                                     new_height = round(new_width * height / width)
                                     new_height = (new_height // 8) * 8
                                     img = img.resize((new_width, new_height), Image.LANCZOS)
-                                img.save(output_path, format='AVIF', quality=self.quality)
+                                img.save(output_path, format='AVIF', quality=100)  # Hardcoded quality to 100
                             else:
-                                if self.output_format == 'JPEG' and img.mode == 'RGBA':
+                                if output_format == 'JPEG' and img.mode == 'RGBA':
                                     img = img.convert('RGB')
-                                img.save(output_path, format=save_format, quality=self.quality)
-                            
+                                img.save(output_path, format=save_format, quality=100)  # Hardcoded quality to 100
+
                             return True
                     except Exception as e:
                         return f"Error converting {os.path.basename(file_path)}: {str(e)}"
-                
+
                 for file_path in self.input_files:
-                    futures.append(executor.submit(convert_file, file_path))
-                
+                    if self.output_format == 'Both':
+                        futures.append(executor.submit(convert_file, file_path, 'WebP'))
+                        futures.append(executor.submit(convert_file, file_path, 'AVIF'))
+                    elif self.output_format in format_settings:
+                        futures.append(executor.submit(convert_file, file_path, self.output_format))
+                    else:
+                        self.error.emit(f"Unsupported format: {self.output_format}")
+                        return
+
                 for i, future in enumerate(concurrent.futures.as_completed(futures)):
                     result = future.result()
                     if result is not True:
                         self.error.emit(result)
                         return
-                    
+
                     processed_files += 1
                     progress_value = int((processed_files / total_files) * 100)
                     self.progress.emit(progress_value)
                     self.status_update.emit(f"Converting files: {processed_files}/{total_files}")
-            
+
             self.status_update.emit(f"Successfully converted {processed_files} files!")
             self.progress.emit(100)
             self.finished.emit()
-            
+
         except FileNotFoundError:
             self.error.emit("File not found.")
         except PermissionError:

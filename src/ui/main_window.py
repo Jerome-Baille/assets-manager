@@ -313,19 +313,11 @@ class ImageResizerApp(QWidget):
         except ImportError:
             self.format_combo.addItem("AVIF (not available - click for info)")
             self.has_avif_support = False
-            
+
+        self.format_combo.addItem("Both (WebP and AVIF)")
         self.format_combo.currentIndexChanged.connect(self.update_quality_options)
         format_layout.addWidget(self.format_combo)
         output_layout.addLayout(format_layout)
-        
-        # Quality settings
-        quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Quality:"))
-        self.quality_slider = QSpinBox()
-        self.quality_slider.setRange(1, 100)
-        self.quality_slider.setValue(80)
-        quality_layout.addWidget(self.quality_slider)
-        output_layout.addLayout(quality_layout)
         
         # Resize settings
         resize_layout = QHBoxLayout()
@@ -525,20 +517,16 @@ class ImageResizerApp(QWidget):
             self.quality_slider.setValue(85)
         elif index == 2:  # PNG
             self.quality_slider.setValue(100)
-        elif index == 3:  # AVIF or AVIF info
-            if hasattr(self, 'has_avif_support') and self.has_avif_support:
-                self.quality_slider.setValue(60)
-            else:
-                # Show info about installing AVIF support
-                QMessageBox.information(
-                    self, 
-                    "AVIF Support Not Available", 
-                    "To enable AVIF format support, please install the required package:\n\n"
-                    "pip install pillow-avif\n\n"
-                    "After installation, restart the application to use AVIF format."
-                )
-                # Reset to WebP format
-                self.format_combo.setCurrentIndex(0)
+        elif index == 3 and not hasattr(self, 'has_avif_support'):
+            QMessageBox.information(
+                self, 
+                "AVIF Support Not Available", 
+                "To enable AVIF format support, please install the required package:\n\n"
+                "pip install pillow-avif\n\n"
+                "After installation, restart the application to use AVIF format."
+            )
+            # Reset to WebP format
+            self.format_combo.setCurrentIndex(0)
 
     def select_converter_input(self):
         """Handle converter input selection."""
@@ -579,38 +567,30 @@ class ImageResizerApp(QWidget):
         if not self.converter_input_files:
             QMessageBox.warning(self, "Warning", "Please select input file(s).")
             return
-            
-        # If output directory is not selected, check if we can use the input directory
+
         if not self.converter_output_dir:
-            # For single file, use its directory
             if len(self.converter_input_files) == 1:
                 self.converter_output_dir = os.path.dirname(self.converter_input_files[0])
                 dir_name = os.path.basename(self.converter_output_dir)
                 self.converter_output_label.setText(f"Output Directory: {dir_name}")
                 self.converter_status_label.setText(f"Using input file directory as output: '{dir_name}'")
-            # For multiple files, check if they're all from the same directory
             else:
-                # Get unique directories
                 input_dirs = {os.path.dirname(f) for f in self.converter_input_files}
                 if len(input_dirs) == 1:
-                    # All files are from the same directory
                     self.converter_output_dir = list(input_dirs)[0]
                     dir_name = os.path.basename(self.converter_output_dir)
                     self.converter_output_label.setText(f"Output Directory: {dir_name}")
                     self.converter_status_label.setText(f"Using common input directory as output: '{dir_name}'")
                 else:
-                    # Files from different directories
                     QMessageBox.warning(
                         self, 
                         "Output Directory Required", 
                         "Input files are from different directories. Please select an output directory."
                     )
                     return
-        
-        # Get conversion settings
+
         format_index = self.format_combo.currentIndex()
-        
-        # Check if AVIF is selected but not supported
+
         if format_index == 3 and not hasattr(self, 'has_avif_support'):
             QMessageBox.warning(
                 self, 
@@ -618,7 +598,7 @@ class ImageResizerApp(QWidget):
                 "AVIF format is not available. Please install pillow-avif package or select a different format."
             )
             return
-            
+
         if format_index == 0:
             output_format = 'WebP'
         elif format_index == 1:
@@ -627,9 +607,9 @@ class ImageResizerApp(QWidget):
             output_format = 'PNG'
         elif hasattr(self, 'has_avif_support') and format_index == 3:
             output_format = 'AVIF'
-        
-        quality = self.quality_slider.value()
-        
+        elif format_index == 4:  # Both (WebP and AVIF)
+            output_format = 'Both'
+
         resize_settings = None
         if self.resize_checkbox.isChecked():
             resize_settings = {
@@ -637,31 +617,26 @@ class ImageResizerApp(QWidget):
                 'height': self.height_spinbox.value(),
                 'keep_aspect_ratio': self.keep_aspect_ratio.isChecked()
             }
-        
-        # Disable UI elements during processing
+
         self.convert_button.setEnabled(False)
         self.converter_input_button.setEnabled(False)
         self.converter_output_button.setEnabled(False)
-        
-        # Start conversion in a separate thread
+
         self.convert_thread = QThread()
         self.convert_worker = ImageConverterWorker(
             self.converter_input_files,
             self.converter_output_dir,
             output_format,
-            quality,
             resize_settings
         )
         self.convert_worker.moveToThread(self.convert_thread)
-        
-        # Connect signals
+
         self.convert_thread.started.connect(self.convert_worker.run)
         self.convert_worker.progress.connect(self.update_converter_progress)
         self.convert_worker.status_update.connect(self.update_converter_status)
         self.convert_worker.finished.connect(self.on_conversion_finished)
         self.convert_worker.error.connect(self.on_conversion_error)
-        
-        # Start the thread
+
         self.converter_progress_bar.setValue(0)
         self.converter_progress_label.setText("Converting images...")
         self.convert_thread.start()
