@@ -22,92 +22,85 @@ class ImageResizerWorker(QObject):
         try:
             # First verify the image can be opened
             try:
-                img = Image.open(self.input_path)
-                img.size  # Verify image is valid
+                with Image.open(self.input_path) as img:
+                    img.size  # Verify image is valid
             except Exception as e:
                 self.error.emit(f"Failed to open image: {str(e)}")
                 return
-                
-            with Image.open(self.input_path) as img:
-                total_tasks = len(self.sizes)
-                completed_tasks = 0
-                self.status_update.emit("Loading image...")
-                
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    futures = []
-                    
-                    def resize_image(size):
-                        try:
-                            resized_img = img.copy()
-                            if resized_img is None:
-                                return "Failed to copy image - received None object"
-                                
-                            resized_img = resized_img.resize((size, size), Image.LANCZOS)
-                            
-                            if size == 16:
-                                output_path = os.path.join(self.output_dir, 'favicon.ico')
-                                if resized_img.mode != 'RGBA':
-                                    resized_img = resized_img.convert('RGBA')
-                                try:
-                                    resized_img.save(output_path, format='ICO', sizes=[(16, 16)])
-                                except Exception as save_error:
-                                    return f"Failed to save favicon.ico: {str(save_error)}"
-                            else:
-                                output_path = os.path.join(self.output_dir, f'icon-{size}x{size}.png')
-                                try:
-                                    resized_img.save(output_path, format='PNG')
-                                except Exception as save_error:
-                                    return f"Failed to save icon-{size}x{size}.png: {str(save_error)}"
-                                
-                            return True
-                        except Exception as e:
-                            return f"Failed to resize image to {size}x{size}: {str(e)}"
-                    
-                    for size in self.sizes:
-                        futures.append(executor.submit(resize_image, size))
-                    
-                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                        result = future.result()
-                        if result is not True:
-                            self.error.emit(f"Failed to resize image: {result}")
-                            return
-                        
-                        completed_tasks += 1
-                        progress_value = int((completed_tasks / total_tasks) * 100)
-                        self.progress.emit(progress_value)
-                        self.status_update.emit(f"Generating icons: {completed_tasks}/{total_tasks}")
-                
-                # Create manifest.json
-                manifest_icons = [
-                    {
-                        "src": f"icon-{size}x{size}.png",
-                        "sizes": f"{size}x{size}",
-                        "type": "image/png"
-                    }
-                    for size in self.sizes if size != 16
-                ]
-                
-                manifest_content = {
-                    "name": "PWA App",
-                    "short_name": "PWA",
-                    "icons": manifest_icons,
-                    "start_url": ".",
-                    "display": "standalone",
-                    "theme_color": "#ffffff",
-                    "background_color": "#ffffff"
-                }
-                
+
+            total_tasks = len(self.sizes)
+            completed_tasks = 0
+            self.status_update.emit("Loading image...")
+
+            def resize_image(size):
                 try:
-                    with open(os.path.join(self.output_dir, 'manifest.json'), 'w') as f:
-                        json.dump(manifest_content, f, indent=2)
+                    with Image.open(self.input_path) as img:
+                        resized_img = img.resize((size, size), Image.LANCZOS)
+
+                        if size == 16:
+                            output_path = os.path.join(self.output_dir, 'favicon.ico')
+                            if resized_img.mode != 'RGBA':
+                                resized_img = resized_img.convert('RGBA')
+                            try:
+                                resized_img.save(output_path, format='ICO', sizes=[(16, 16)])
+                            except Exception as save_error:
+                                return f"Failed to save favicon.ico: {str(save_error)}"
+                        else:
+                            output_path = os.path.join(self.output_dir, f'icon-{size}x{size}.png')
+                            try:
+                                resized_img.save(output_path, format='PNG')
+                            except Exception as save_error:
+                                return f"Failed to save icon-{size}x{size}.png: {str(save_error)}"
+
+                        return True
                 except Exception as e:
-                    self.error.emit(f"Failed to create manifest.json: {str(e)}")
-                    return
-                
+                    return f"Failed to resize image to {size}x{size}: {str(e)}"
+
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(resize_image, size) for size in self.sizes]
+
+                for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                    result = future.result()
+                    if result is not True:
+                        self.error.emit(f"Failed to resize image: {result}")
+                        return
+
+                    completed_tasks += 1
+                    progress_value = int((completed_tasks / total_tasks) * 100)
+                    self.progress.emit(progress_value)
+                    self.status_update.emit(f"Generating icons: {completed_tasks}/{total_tasks}")
+
+            # Create manifest.json
+            manifest_icons = [
+                {
+                    "src": f"icon-{size}x{size}.png",
+                    "sizes": f"{size}x{size}",
+                    "type": "image/png"
+                }
+                for size in self.sizes if size != 16
+            ]
+
+            manifest_content = {
+                "name": "PWA App",
+                "short_name": "PWA",
+                "icons": manifest_icons,
+                "start_url": ".",
+                "display": "standalone",
+                "theme_color": "#ffffff",
+                "background_color": "#ffffff"
+            }
+
+            try:
+                with open(os.path.join(self.output_dir, 'manifest.json'), 'w') as f:
+                    json.dump(manifest_content, f, indent=2)
+            except Exception as e:
+                self.error.emit(f"Failed to create manifest.json: {str(e)}")
+                return
+
             self.status_update.emit("All icons generated successfully!")
             self.progress.emit(100)
             self.finished.emit()
-            
+
         except FileNotFoundError:
             self.error.emit("File not found.")
         except PermissionError:
